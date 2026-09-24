@@ -1,0 +1,71 @@
+#!/usr/bin/env bash
+set -euo pipefail
+[[ $EUID -eq 0 ]] || { echo "Lance en root."; exit 1; }
+
+echo "===== GameLinux Installation ====="
+lsblk -o NAME,SIZE,TYPE,MODEL
+echo
+read -r -p "Disque cible (ex: /dev/sda ou /dev/nvme0n1): " DISK
+[[ -b "$DISK" ]] || { echo "Disque invalide."; exit 1; }
+lsblk "$DISK"
+echo
+read -r -p "Tape EXACTEMENT EFFACER pour continuer: " CONFIRM
+[[ "$CONFIRM" == "EFFACER" ]] || { echo "Annulé."; exit 1; }
+
+read -r -p "Nom d'utilisateur Linux: " USERNAME
+read -r -s -p "Mot de passe utilisateur: " PASSWORD
+echo
+read -r -s -p "Mot de passe root: " ROOTPASSWORD
+echo
+
+timedatectl set-ntp true || true
+systemctl start NetworkManager || true
+
+wipefs -af "$DISK"
+parted -s "$DISK" mklabel gpt
+parted -s "$DISK" mkpart ESP fat32 1MiB 1GiB
+parted -s "$DISK" set 1 esp on
+parted -s "$DISK" mkpart ROOT ext4 1GiB 100%
+
+if [[ "$DISK" == *nvme* ]]; then EFI="$DISK"p1; ROOT="$DISK"p2; else EFI="$DISK"1; ROOT="$DISK"2; fi
+mkfs.fat -F32 "$EFI"
+mkfs.ext4 -F "$ROOT"
+mount "$ROOT" /mnt
+mkdir -p /mnt/boot
+mount "$EFI" /mnt/boot
+
+pacstrap -K /mnt base linux-zen linux-zen-headers linux-firmware networkmanager sudo git nano mesa lib32-mesa vulkan-icd-loader lib32-vulkan-icd-loader gamemode lib32-gamemode gamescope mangohud lib32-mangohud steam wine winetricks protontricks pipewire pipewire-alsa pipewire-pulse wireplumber plasma-meta plasma-wayland-session sddm xdg-desktop-portal xdg-desktop-portal-kde vulkan-tools pciutils
+
+genfstab -U /mnt >> /mnt/etc/fstab
+arch-chroot /mnt ln -sf /usr/share/zoneinfo/Europe/Paris /etc/localtime
+arch-chroot /mnt hwclock --systohc
+sed -i 's/^#fr_FR.UTF-8 UTF-8/fr_FR.UTF-8 UTF-8/' /mnt/etc/locale.gen
+arch-chroot /mnt locale-gen
+echo 'LANG=fr_FR.UTF-8' > /mnt/etc/locale.conf
+echo 'KEYMAP=fr' > /mnt/etc/vconsole.conf
+echo 'gamelinux' > /mnt/etc/hostname
+printf '%s\n' '127.0.0.1 localhost' '::1 localhost' '127.0.1.1 gamelinux.localdomain gamelinux' > /mnt/etc/hosts
+
+arch-chroot /mnt systemctl enable NetworkManager
+arch-chroot /mnt systemctl enable sddm
+arch-chroot /mnt useradd -m -G wheel,audio,video,storage "$USERNAME"
+printf '%s:%s\n' "$USERNAME" "$PASSWORD" | arch-chroot /mnt chpasswd
+printf 'root:%s\n' "$ROOTPASSWORD" | arch-chroot /mnt chpasswd
+echo '%wheel ALL=(ALL:ALL) ALL' > /mnt/etc/sudoers.d/10-wheel
+chmod 440 /mnt/etc/sudoers.d/10-wheel
+printf '%s\n' 'vm.max_map_count=1048576' 'fs.inotify.max_user_instances=8192' > /mnt/etc/sysctl.d/99-gamelinux.conf
+
+arch-chroot /mnt bootctl install
+mkdir -p /mnt/boot/loader/entries
+printf '%s\n' 'default gamelinux' 'timeout 3' 'editor no' > /mnt/boot/loader/loader.conf
+ROOTUUID="$(blkid -s UUID -o value "$ROOT")"
+cat > /mnt/boot/loader/entries/gamelinux.conf <<EOF
+title GameLinux
+linux /vmlinuz-linux-zen
+initrd /initramfs-linux-zen.img
+options root=UUID=$ROOTUUID rw quiet
+EOF
+
+sync
+umount -R /mnt
+echo "Installation terminée. Retire la clé USB et redémarre."
