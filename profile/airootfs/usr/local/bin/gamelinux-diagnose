@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+set -u
+echo "===== GameLinux DIAGNOSTIC ====="
+echo
+echo "--- Kernel ---"
+uname -a
+echo
+echo "--- GPU ---"
+lspci -k | grep -EA3 'VGA|3D|Display' || true
+echo
+echo "--- Vulkan ---"
+vulkaninfo --summary 2>&1 | head -100 || true
+echo
+echo "--- GameMode ---"
+gamemoded -t 2>&1 || true
+echo
+echo "--- PipeWire ---"
+systemctl --user --no-pager status pipewire wireplumber pipewire-pulse 2>&1 | head -100 || true
+echo
+echo "--- Disques ---"
+lsblk -o NAME,SIZE,TYPE,FSTYPE,MOUNTPOINTS
